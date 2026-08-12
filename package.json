@@ -1,0 +1,19 @@
+{
+  "name": "tools-berry-mcp",
+  "version": "1.0.0",
+  "description": "Remote MCP server for US paycheck & payroll-tax math (2026, all 50 states + DC) — the live engine behind tools-berry.com",
+  "type": "module",
+  "license": "MIT",
+  "author": "Edmond Daher",
+  "homepage": "https://tools-berry.com/mcp/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/edyda99/tools-berry-mcp.git"
+  },
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "test": "node test/test-mcp-server.js"
+  }
+}

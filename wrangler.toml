@@ -1,0 +1,17 @@
+# Standalone Cloudflare Worker: a remote MCP server exposing the 2026 US
+# paycheck engine over Streamable HTTP. No bindings, no storage, no secrets.
+#
+# Deploy your own copy:  npx wrangler deploy
+name = "tools-berry-mcp"
+main = "worker.js"
+compatibility_date = "2026-07-18"
+workers_dev = true
+
+# The canonical instance answers on mcp.tools-berry.com. Uncomment and point at
+# a hostname you control if you want your own copy on a custom domain.
+# routes = [
+#   { pattern = "mcp.example.com", custom_domain = true }
+# ]
+
+[observability]
+enabled = true

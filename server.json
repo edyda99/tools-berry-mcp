@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "com.tools-berry/paycheck",
+  "description": "Live US paycheck & payroll-tax math for 2026 — all 50 states + DC. The same engine that powers tools-berry.com, exposed as MCP tools.",
+  "version": "1.0.0",
+  "websiteUrl": "https://tools-berry.com/mcp/",
+  "repository": {
+    "url": "https://github.com/edyda99/tools-berry-mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.tools-berry.com"
+    }
+  ]
+}
