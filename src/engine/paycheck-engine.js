@@ -396,15 +396,32 @@ export function federalTaxSubtraction(federalTax, agi, filingStatus, cfg) {
  * the salary-ladder pages print it, so the two can never describe different arithmetic.
  *
  * Order: the standard deduction (after any income test), then the FICA-paid deduction
- * (Massachusetts), then the federal income tax subtraction (Alabama, Missouri, Oregon).
- * Each one is reported as the amount the rule allows, and taxable income is floored at
- * zero after each, which is what a state return does with a deduction larger than the
- * income left to take it from.
+ * (Massachusetts), then the federal income tax subtraction (Alabama, Missouri, Oregon),
+ * then the state's own overtime premium deduction (Alabama). Each one is reported as the
+ * amount the rule allows, and taxable income is floored at zero after each, which is what
+ * a state return does with a deduction larger than the income left to take it from.
+ *
+ * `overtimePremium` is the year's qualified overtime premium (the pay above the regular
+ * rate, 26 U.S.C. 225(c)), annual USD. Only a state carrying `tax.overtimePremiumDeduction`
+ * reads it, and it is taken AFTER AGI: Alabama's is a subsection (a) deduction of Ala. Code
+ * 40-18-15, so it does not lower the AGI the standard-deduction chart is read at.
+ * computePaycheck() never passes it, because the deduction is claimed on the return and is
+ * not in Alabama's withholding (`inWithholdingFormula: false`); stateOvertimeAtFiling()
+ * below is the one caller that does. Defaults to 0, which deducts nothing.
+ *
+ * `deductionAfterAgi` is a deduction the state return takes BELOW AGI, last, as a dollar
+ * amount: the state following a federal deduction (tips, overtime, the senior deduction),
+ * which federal law takes below AGI on Schedule 1-A, so it does not move the AGI that the
+ * income tests above read. That matters in Oregon, the one state here that both follows a
+ * deduction and reads AGI: its federal-tax subtraction limit is keyed to federal AGI (ORS
+ * 316.695(3)), which the tips and overtime deductions do not lower. Defaults to 0.
  *
  * @returns {{agi:number, standardDeduction:number, ficaDeduction:number,
- *            federalTaxSubtraction:number, taxable:number}}
+ *            federalTaxSubtraction:number, overtimeDeduction:number, deductionAfterAgi:number,
+ *            taxable:number}}
  */
-export function stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax = 0, ficaPaid = 0, federalTax = 0) {
+export function stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax = 0, ficaPaid = 0, federalTax = 0,
+  overtimePremium = 0, deductionAfterAgi = 0) {
   const t = (stateData && stateData.tax) || {};
   // grossAnnual - preTax is this engine's federal AGI: federalIncomeTax() above derives
   // federal TAXABLE income as exactly that minus the federal standard deduction, so the
@@ -423,7 +440,38 @@ export function stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax 
     ? federalTaxSubtraction(federalTax, agi, filingStatus, t.federalTaxSubtraction)
     : 0;
   taxable = Math.max(0, taxable - fedSub);
-  return { agi, standardDeduction, ficaDeduction, federalTaxSubtraction: fedSub, taxable };
+  const otDed = stateOvertimeDeduction(overtimePremium, t.overtimePremiumDeduction);
+  taxable = Math.max(0, taxable - otDed);
+  const afterAgi = Math.max(0, Number(deductionAfterAgi) || 0);
+  taxable = Math.max(0, taxable - afterAgi);
+  return { agi, standardDeduction, ficaDeduction, federalTaxSubtraction: fedSub, overtimeDeduction: otDed,
+    deductionAfterAgi: afterAgi, taxable };
+}
+
+/**
+ * A state's own deduction for the overtime premium: the premium, never more than the
+ * state's yearly cap. Opt-in and data-driven: with no `cfg` (every state but Alabama and
+ * Georgia) it is zero. Alabama, Ala. Code 40-18-15(a)(29) (Act 2026-604): "qualified
+ * overtime compensation received during the taxable year, not to exceed one thousand
+ * dollars ($1,000) per taxpayer", qualified overtime compensation defined by 26 U.S.C. 225,
+ * so the premium only. There is no income limit: the Department of Revenue puts it as "the
+ * lesser of the actual overtime premium or a maximum annual amount of $1,000 per taxpayer".
+ * Georgia, O.C.G.A. 48-7-27(a)(16) (HB 463, 2026): the same 225 premium up to $1,750, but
+ * only for "a full-time employee paid by an hourly wage" (`cfg.hourlyOnly`). This engine is
+ * not told the pay type, so the caller decides that and passes no premium (or no cfg) for
+ * a salaried filer, as the paycheck page does in stateOwnDeduction().
+ *
+ * Nothing here is specific to overtime: it is a capped amount, so the paycheck page runs
+ * Georgia's cash-tips exclusion (48-7-27(a)(17), up to $1,750, `tax.cashTipsDeduction`)
+ * through it too.
+ *
+ * @param {number} premium - the year's qualified overtime premium (annual USD)
+ * @param {{cap:number}} [cfg] - the state's `tax.overtimePremiumDeduction`
+ * @returns {number}
+ */
+export function stateOvertimeDeduction(premium, cfg) {
+  if (!cfg) return 0;
+  return Math.min(Math.max(0, Number(premium) || 0), Math.max(0, Number(cfg.cap) || 0));
 }
 
 /**
@@ -458,14 +506,20 @@ export function stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax 
  *   the W-4 dependent credit (see federalTaxSubtraction for why that figure); bonus-tax.js
  *   and the tips block in app.js pass the federal tax at each of their two income levels.
  *   Defaults to 0, which subtracts nothing.
+ * @param {number} overtimePremium - the year's qualified overtime premium, for a state with
+ *   its own overtime deduction (Alabama). See stateTaxableIncome; computePaycheck() never
+ *   passes it, since the deduction is claimed at filing and is not in withholding.
+ * @param {number} deductionAfterAgi - a state deduction taken below AGI (the state following a
+ *   federal deduction). See stateTaxableIncome.
  */
-export function stateIncomeTax(grossAnnual, filingStatus, stateData, preTax = 0, ficaPaid = 0, federalTax = 0) {
+export function stateIncomeTax(grossAnnual, filingStatus, stateData, preTax = 0, ficaPaid = 0, federalTax = 0,
+  overtimePremium = 0, deductionAfterAgi = 0) {
   if (!stateData || !stateData.hasIncomeTax || !stateData.tax) return 0;
   const t = stateData.tax;
   if (t.type === 'none') return 0;
 
-  const { agi, taxable } =
-    stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax, ficaPaid, federalTax);
+  const { agi, taxable } = stateTaxableIncome(grossAnnual, filingStatus, stateData, preTax, ficaPaid, federalTax,
+    overtimePremium, deductionAfterAgi);
 
   let tax;
   if (t.type === 'flat') {
@@ -504,27 +558,167 @@ export function stateIncomeTax(grossAnnual, filingStatus, stateData, preTax = 0,
  * and Oregon subtract it). So the BASE term is computePaycheck's own state figure at `base`
  * to the cent, and with both deductions below at zero so is the TOP term at `top`.
  *
- * THE TOP TERM PARTS FROM computePaycheck IN TWO INPUTS, ON PURPOSE. Both are earned by the
- * slice itself, and computePaycheck has no tips input, so it cannot see either:
+ * THE TOP TERM TAKES TWO MORE INPUTS, both earned by the slice itself:
  *   federalDeduction  a federal deduction only the slice earns (no tax on tips). The three
  *                     states subtract the federal tax OWED on the return, which is after
  *                     that deduction, so the liability at the top is taken after it. That
- *                     is the engine's annual-return basis, and it counts the deduction's
- *                     knock-on on the state exactly once, here: the at-filing block prices
- *                     the federal saving only. Pricing the state on the pre-deduction
- *                     liability would credit a filer with federal tax the return never shows.
+ *                     is the engine's annual-return basis: the at-filing block prices the
+ *                     federal saving only. Pricing the state on the pre-deduction liability
+ *                     would credit a filer with federal tax the return never shows.
  *   stateDeduction    the state's own matching deduction, where the state follows it.
+ * computePaycheck takes the same two as `returnDeductions`. With the tips on top of the pay
+ * the page's own figure has no tips in it, so it is the BASE term and gets neither. With the
+ * tips INSIDE the pay the page's figure IS the top term, so the paycheck page passes both
+ * there too, and the page's state line less the base term is this slice to the cent.
  *
  * @returns {number} annual state income tax on the slice, never below zero
  */
 export function stateTaxOnSlice({ base, top, filingStatus, stateData, fed, preTaxIncome = 0,
   preTaxFica = 0, dependentsCredit = 0, federalDeduction = 0, stateDeduction = 0 }) {
   const credit = Math.max(0, dependentsCredit || 0);
-  const at = (income, fedDed, stDed) => stateIncomeTax(income, filingStatus, stateData,
-    preTaxIncome + stDed,
-    ficaTax(income, filingStatus, fed, preTaxFica).total,
-    Math.max(0, federalIncomeTax(income, filingStatus, fed, preTaxIncome + fedDed) - credit));
+  const at = (income, fedDed, stDed) => stateTaxAt(income, filingStatus, stateData, fed,
+    preTaxIncome, preTaxFica, credit, fedDed, stDed);
   return Math.max(0, at(top, federalDeduction, stateDeduction) - at(base, 0, 0));
+}
+
+/**
+ * The state income tax at ONE income, fed what the return at that income shows the state: the
+ * pre-tax money, the FICA paid there (Massachusetts deducts it), the federal income tax
+ * liability there, bracket tax after any federal deduction and less the W-4 credits (Alabama,
+ * Missouri and Oregon subtract it), and any state deduction BELOW AGI. computePaycheck() and both
+ * terms of stateTaxOnSlice() call this one function, so the page's state figure and the tips
+ * block's state figure are the same arithmetic and cannot drift apart.
+ *
+ * The state deduction used to be added to the pre-tax money, which also lowered the AGI the
+ * state's income tests read. It is a deduction the state follows from federal law, which takes
+ * it below AGI, so it now goes in as stateIncomeTax's deductionAfterAgi. The only figures that
+ * moved are Oregon's, where a tips deduction near $125,000 could pull AGI under a step of the
+ * federal-tax subtraction limit that the return still reads at the full AGI.
+ */
+function stateTaxAt(income, filingStatus, stateData, fed, preTaxIncome, preTaxFica, credit,
+  federalDeduction, stateDeduction) {
+  return stateIncomeTax(income, filingStatus, stateData,
+    preTaxIncome,
+    ficaTax(income, filingStatus, fed, preTaxFica).total,
+    Math.max(0, federalIncomeTax(income, filingStatus, fed, preTaxIncome + federalDeduction) - credit),
+    0, stateDeduction);
+}
+
+/**
+ * What ONE deduction on the return does to the STATE tax at filing: the general helper behind
+ * every state row the paycheck page prints at filing (the tips block's knock-on row, and the
+ * overtime and senior rows), so each is the same arithmetic. Returns null for a state that
+ * taxes no wages.
+ *
+ * TWO EFFECTS, BOTH ON THE STATE RETURN:
+ *   stateSaving     the state's own deduction (`stateDeduction`, a dollar amount the caller
+ *                   reads from the state's rule): it comes off state taxable income BELOW AGI.
+ *                   Measured with the federal liability already AFTER the federal deduction,
+ *                   since that is the liability the return shows.
+ *   federalKnockOn  Alabama (40-18-15(c)), Missouri (RSMo 143.171) and Oregon (ORS 316.680)
+ *                   let a filer subtract federal income tax. The federal deduction lowers that
+ *                   tax, so there can be less to subtract and the state tax goes UP. Nothing
+ *                   here names a state: it is the state's own subtraction rule run twice, so it
+ *                   is zero wherever that rule does not move. Every state without a subtraction
+ *                   gets zero; Missouri's share drops to nothing above $125,000 of AGI; and in
+ *                   Oregon it is zero once the federal tax is over the subtraction limit both
+ *                   before and after the deduction ($8,750 under $125,000 of AGI, $250,000
+ *                   joint, stepping to $0 at $145,000 and $290,000).
+ *   net = stateSaving - federalKnockOn, the change in state tax at filing (negative = more tax).
+ *
+ * CHAINED, like the federal rows: `federalDeductionBefore` and `stateDeductionBefore` are the
+ * deductions already taken ahead of this one, so this one is measured on top of them.
+ *
+ * EACH TERM IS FED WHAT computePaycheck() FEEDS THE STATE at `income`: the pre-tax money, the
+ * FICA paid there and the federal liability less the W-4 credits (never the 4(c) extra
+ * withholding). With nothing deducted ahead, `before` is computePaycheck's own state figure.
+ *
+ * @param {object} a
+ * @param {number} a.income             wages on the return (W-2 box 1 before pre-tax money)
+ * @param {string} a.filingStatus
+ * @param {object} a.stateData          tax-data-2026.json .states[slug]
+ * @param {object} a.fed                tax-data-2026.json .federal
+ * @param {number} [a.preTaxIncome]     401(k) + Section 125, as computePaycheck takes them
+ * @param {number} [a.preTaxFica]       Section 125 only
+ * @param {number} [a.dependentsCredit] W-4 step 3 credits
+ * @param {number} [a.federalDeductionBefore] federal deductions already taken ahead of this one
+ * @param {number} [a.stateDeductionBefore]   state deductions already taken ahead of this one
+ * @param {number} [a.federalDeduction] this federal deduction, as allowed (after cap and phase-out)
+ * @param {number} [a.stateDeduction]   the state's own matching deduction, 0 where it has none
+ * @returns {null|{stateSaving:number, federalKnockOn:number, net:number, before:number,
+ *   after:number, federalTaxBefore:number, federalTaxAfter:number, subtractionBefore:number,
+ *   subtractionAfter:number}}
+ */
+export function stateDeductionAtFiling({ income, filingStatus, stateData, fed, preTaxIncome = 0, preTaxFica = 0,
+  dependentsCredit = 0, federalDeductionBefore = 0, stateDeductionBefore = 0, federalDeduction = 0,
+  stateDeduction = 0 }) {
+  if (!stateData || !stateData.hasIncomeTax || !stateData.tax || stateData.tax.type === 'none') return null;
+  const credit = Math.max(0, dependentsCredit || 0);
+  const fica = ficaTax(income, filingStatus, fed, preTaxFica).total;
+  const owed = (fedDed) =>
+    Math.max(0, federalIncomeTax(income, filingStatus, fed, preTaxIncome + fedDed) - credit);
+  const fedBefore = Math.max(0, federalDeductionBefore || 0);
+  const fedAfter = fedBefore + Math.max(0, federalDeduction || 0);
+  const stBefore = Math.max(0, stateDeductionBefore || 0);
+  const stAfter = stBefore + Math.max(0, stateDeduction || 0);
+  const at = (fedDed, stDed) =>
+    stateIncomeTax(income, filingStatus, stateData, preTaxIncome, fica, owed(fedDed), 0, stDed);
+  const sub = (fedDed, stDed) =>
+    stateTaxableIncome(income, filingStatus, stateData, preTaxIncome, fica, owed(fedDed), 0, stDed).federalTaxSubtraction;
+  const before = at(fedBefore, stBefore);
+  const afterFederal = at(fedAfter, stBefore);
+  const after = at(fedAfter, stAfter);
+  return {
+    stateSaving: afterFederal - after,
+    federalKnockOn: afterFederal - before,
+    net: before - after,
+    before,
+    after,
+    federalTaxBefore: owed(fedBefore),
+    federalTaxAfter: owed(fedAfter),
+    subtractionBefore: sub(fedBefore, stBefore),
+    subtractionAfter: sub(fedAfter, stBefore)
+  };
+}
+
+/**
+ * What overtime does to the STATE return at filing, for a state with its own overtime
+ * premium deduction (Alabama, Ala. Code 40-18-15(a)(29)). Returns null for every other
+ * state; stateDeductionAtFiling() above is the general helper, and this is it run with the
+ * state's own capped premium deduction as the state deduction.
+ *
+ *   stateSaving     the premium up to the cap off Alabama taxable income, after AGI.
+ *   federalKnockOn  the federal overtime deduction lowers the federal tax Alabama lets you
+ *                   subtract, so the Alabama tax goes UP by the state rate on the federal saving.
+ *   net = stateSaving - federalKnockOn. It is NEGATIVE when the federal saving is large enough:
+ *   at Alabama's 5% the knock-on is 5% of the federal saving, and the state deduction is worth
+ *   at most 5% of $1,000 = $50, so a federal saving over $1,000 costs more on the Alabama
+ *   return than the cap gives back.
+ *
+ * @param {object} a  as stateDeductionAtFiling, plus:
+ * @param {number} [a.federalOvertimeDeduction] the federal overtime deduction allowed
+ * @param {number} [a.premium]          the year's qualified overtime premium
+ * @returns {null|{deduction:number, cap:number, stateSaving:number, federalKnockOn:number,
+ *                 net:number, before:number, after:number}}
+ */
+export function stateOvertimeAtFiling({ income, filingStatus, stateData, fed, preTaxIncome = 0, preTaxFica = 0,
+  dependentsCredit = 0, federalDeductionBefore = 0, stateDeductionBefore = 0, federalOvertimeDeduction = 0,
+  premium = 0 }) {
+  const cfg = stateData && stateData.hasIncomeTax && stateData.tax && stateData.tax.overtimePremiumDeduction;
+  if (!cfg) return null;
+  const deduction = stateOvertimeDeduction(premium, cfg);
+  const r = stateDeductionAtFiling({ income, filingStatus, stateData, fed, preTaxIncome, preTaxFica,
+    dependentsCredit, federalDeductionBefore, stateDeductionBefore,
+    federalDeduction: federalOvertimeDeduction, stateDeduction: deduction });
+  return {
+    deduction,
+    cap: cfg.cap,
+    stateSaving: r.stateSaving,
+    federalKnockOn: r.federalKnockOn,
+    net: r.net,
+    before: r.before,
+    after: r.after
+  };
 }
 
 /**
@@ -585,10 +779,19 @@ const ZERO_ADV = { retirement401k: 0, cafeteria125: 0, dependentsCredit: 0, extr
  * @param {keyof PAY_PERIODS} input.payFrequency
  * @param {string} input.stateSlug
  * @param {AdvancedInputs} [input.adv] - optional advanced-mode inputs (default all 0)
+ * @param {{federal?:number, state?:number}} [input.returnDeductions] - deductions the filer
+ *   takes on the return that the inputs above cannot see, today only the no-tax-on-tips
+ *   deduction when the tips are already inside the pay. They reach the STATE figure and
+ *   nothing else: `state` comes off the state's taxable income (pass it only where the state
+ *   follows the deduction), and `federal` comes off the federal liability that Alabama,
+ *   Missouri and Oregon subtract, because those states subtract the federal tax owed on the
+ *   return. The federal row itself stays the tax before the deduction, which is what is
+ *   withheld; the paycheck page prices the federal saving in its at-filing block. Both default
+ *   to 0, which reproduces every other caller's figures exactly.
  * @param {object} taxData - parsed tax-data-2026.json
  * @returns {object} annual + per-period breakdown
  */
-export function computePaycheck({ wage, filingStatus, payFrequency, stateSlug, adv }, taxData) {
+export function computePaycheck({ wage, filingStatus, payFrequency, stateSlug, adv, returnDeductions }, taxData) {
   const fed = taxData.federal;
   const grossAnnual = annualizeGross(wage);
   const stateData = taxData.states ? taxData.states[stateSlug] : null;
@@ -618,8 +821,14 @@ export function computePaycheck({ wage, filingStatus, payFrequency, stateSlug, a
   // FICA they paid (capped at $2,000). Passing the figure the engine just computed keeps
   // the two lines of the same paycheck consistent; every other state ignores it. The
   // federal liability goes over for the same reason, for the three states that let a filer
-  // subtract federal income tax; every other state ignores it too.
-  const state = stateIncomeTax(grossAnnual, filingStatus, stateData, preTaxIncome, fica.total, fedLiability);
+  // subtract federal income tax; every other state ignores it too. Both go through
+  // stateTaxAt(), the helper the tips block's stateTaxOnSlice() uses, and with no return
+  // deductions it hands stateIncomeTax exactly fica.total and fedLiability.
+  const rd = returnDeductions || {};
+  const fedDedOnReturn = Math.max(0, Number(rd.federal) || 0);
+  const stateDedOnReturn = Math.max(0, Number(rd.state) || 0);
+  const state = stateTaxAt(grossAnnual, filingStatus, stateData, fed, preTaxIncome, preTaxFica,
+    dependentsCredit, fedDedOnReturn, stateDedOnReturn);
 
   // State disability / paid-leave employee contributions: post-tax, on gross
   // wages, kept OUT of totalTax and out of annual.state (so tax-only rates and
