@@ -11,17 +11,18 @@ import suppData from './src/data/state-supplemental-2026.json' with { type: 'jso
 
 export const SITE = 'https://tools-berry.com';
 
-// Mirrors build.js LADDER_STATES: the 25 states that have a
-// /<slug>-take-home-pay/ hub, and CA_LADDER_SALARIES: the 9 rungs each hub
+// Mirrors build.js LADDER_STATES: the states that have a
+// /<slug>-take-home-pay/ hub, and CA_LADDER_SALARIES: the rungs each hub
 // builds a /<slug>-take-home-pay-<amount>/ page for. Keep in sync with build.js.
 export const LADDER_STATES = new Set([
   'california', 'texas', 'florida', 'new-york', 'pennsylvania', 'illinois',
   'ohio', 'georgia', 'north-carolina', 'michigan', 'new-jersey', 'virginia',
   'washington', 'arizona', 'massachusetts', 'tennessee', 'indiana', 'missouri',
   'maryland', 'wisconsin', 'colorado', 'minnesota', 'south-carolina', 'alabama',
-  'louisiana'
+  'louisiana', 'kentucky', 'oregon', 'oklahoma', 'connecticut', 'utah', 'iowa',
+  'nevada', 'arkansas', 'mississippi', 'kansas', 'new-mexico', 'nebraska'
 ]);
-export const LADDER_SALARIES = [30000, 40000, 50000, 70000, 80000, 100000, 120000, 150000, 200000];
+export const LADDER_SALARIES = [30000, 40000, 50000, 70000, 75000, 80000, 100000, 120000, 150000, 200000];
 
 export const FILING_STATUSES = taxData.filingStatuses.map((f) => f.id);
 
